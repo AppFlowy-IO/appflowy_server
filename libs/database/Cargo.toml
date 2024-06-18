@@ -20,7 +20,7 @@ serde_json.workspace = true
 tonic-proto.workspace = true
 
 sqlx = { version = "0.7", default-features = false, features = ["postgres", "chrono", "uuid", "macros", "runtime-tokio-rustls", "rust_decimal"] }
-pgvector = { workspace = true, features = ["sqlx"] }
+pgvector = { workspace = true, features = ["sqlx"], optional = true }
 tracing = { version = "0.1.40" }
 uuid = { version = "1.6.1", features = ["serde", "v4"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -36,3 +36,4 @@ bincode.workspace = true
 [features]
 default = ["s3"]
 s3 = ["rust-s3"]
+ai = ["pgvector"]

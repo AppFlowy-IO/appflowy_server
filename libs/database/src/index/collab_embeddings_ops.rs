@@ -2,7 +2,7 @@ use std::ops::DerefMut;
 
 use collab_entity::CollabType;
 use pgvector::Vector;
-use sqlx::{Executor, Postgres, Transaction};
+use sqlx::{Executor, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use database_entity::dto::AFCollabEmbeddingParams;
@@ -11,7 +11,7 @@ pub async fn get_index_status(
   tx: &mut Transaction<'_, sqlx::Postgres>,
   oid: &str,
 ) -> Result<Option<bool>, sqlx::Error> {
-  let result = sqlx::query!(
+  let result = sqlx::query(
     r#"
 SELECT
   w.settings['disable_indexing']::boolean as disable_indexing,
@@ -23,15 +23,14 @@ SELECT
   END as has_index
 FROM af_collab c
 JOIN af_workspace w ON c.workspace_id = w.workspace_id
-WHERE c.oid = $1"#,
-    oid
-  )
+WHERE c.oid = $1"#
+  ).bind(oid)
   .fetch_one(tx.deref_mut())
   .await?;
-  if result.disable_indexing.unwrap_or(false) {
+  if result.get::<Option<bool>, _>(0).unwrap_or(false) {
     return Ok(None);
   }
-  Ok(Some(result.has_index.unwrap_or(false)))
+  Ok(Some(result.get::<Option<bool>, _>(1).unwrap_or(false)))
 }
 
 pub async fn upsert_collab_embeddings(
@@ -72,12 +71,10 @@ pub async fn remove_collab_embeddings(
   tx: &mut Transaction<'_, sqlx::Postgres>,
   ids: &[String],
 ) -> Result<(), sqlx::Error> {
-  sqlx::query!(
-    "DELETE FROM af_collab_embeddings WHERE fragment_id IN (SELECT unnest($1::text[]))",
-    ids
-  )
-  .execute(tx.deref_mut())
-  .await?;
+  sqlx::query("DELETE FROM af_collab_embeddings WHERE fragment_id IN (SELECT unnest($1::text[]))")
+    .bind(ids)
+    .execute(tx.deref_mut())
+    .await?;
   Ok(())
 }
 
@@ -87,14 +84,14 @@ pub async fn get_collabs_without_embeddings<'a, E>(
 where
   E: Executor<'a, Database = Postgres>,
 {
-  let oids = sqlx::query!(
+  let oids: Vec<(Uuid, String, i32)> = sqlx::query_as(
     r#"
   select c.workspace_id, c.oid, c.partition_key
   from af_collab c
   where not exists (
     select 1
     from af_collab_embeddings em
-    where em.oid = c.oid and em.partition_key = 0)"# // atm. get only documents
+    where em.oid = c.oid and em.partition_key = 0)"#, // atm. get only documents
   )
   .fetch_all(executor)
   .await?;
@@ -102,9 +99,9 @@ where
     oids
       .into_iter()
       .map(|r| CollabId {
-        collab_type: CollabType::from(r.partition_key),
-        workspace_id: r.workspace_id,
-        object_id: r.oid,
+        collab_type: CollabType::from(r.2),
+        workspace_id: r.0,
+        object_id: r.1,
       })
       .collect(),
   )

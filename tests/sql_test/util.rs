@@ -1,8 +1,10 @@
+use appflowy_cloud::middleware::feature_migration::FeatureMigrationSource;
 use lazy_static::lazy_static;
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use snowflake::Snowflake;
 use sqlx::PgPool;
+use sqlx_core::migrate::Migrator;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -22,7 +24,9 @@ pub async fn setup_db(pool: &PgPool) -> anyhow::Result<()> {
   .execute(pool)
   .await?;
 
-  sqlx::migrate!("./migrations")
+  Migrator::new(FeatureMigrationSource::new("./migrations"))
+    .await
+    .unwrap()
     .set_ignore_missing(true)
     .run(pool)
     .await

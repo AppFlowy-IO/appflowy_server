@@ -43,6 +43,7 @@ use openssl::x509::X509;
 use secrecy::{ExposeSecret, Secret};
 use snowflake::Snowflake;
 use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx_core::migrate::Migrator;
 use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,7 +51,7 @@ use tokio::sync::{Mutex, RwLock};
 use tonic_proto::history::history_client::HistoryClient;
 
 use crate::api::ai::ai_completion_scope;
-use crate::api::search::search_scope;
+use crate::middleware::feature_migration::FeatureMigrationSource;
 use tracing::{info, warn};
 use workspace_access::WorkspaceAccessControlImpl;
 
@@ -128,7 +129,7 @@ pub async fn run_actix_server(
 
   let realtime_server_actor = Supervisor::start(|_| RealtimeServerActor(realtime_server));
   let mut server = HttpServer::new(move || {
-    App::new()
+    let app = App::new()
       .wrap(NormalizePath::trim())
        // Middleware is registered for each App, scope, or Resource and executed in opposite order as registration
       .wrap(MetricsMiddleware)
@@ -150,7 +151,6 @@ pub async fn run_actix_server(
       .service(ai_completion_scope())
       .service(history_scope())
       .service(metrics_scope())
-      .service(search_scope())
       .app_data(Data::new(state.metrics.registry.clone()))
       .app_data(Data::new(state.metrics.request_metrics.clone()))
       .app_data(Data::new(state.metrics.realtime_metrics.clone()))
@@ -158,7 +158,14 @@ pub async fn run_actix_server(
       .app_data(Data::new(realtime_server_actor.clone()))
       .app_data(Data::new(state.config.gotrue.jwt_secret.clone()))
       .app_data(Data::new(state.clone()))
-      .app_data(Data::new(storage.clone()))
+      .app_data(Data::new(storage.clone()));
+
+    #[cfg(feature = "ai")]
+    {
+      return app.service(crate::api::search::search_scope());
+    }
+
+    app
   });
 
   server = match pair {
@@ -435,7 +442,9 @@ async fn get_connection_pool(setting: &DatabaseSetting) -> Result<PgPool, Error>
 }
 
 async fn migrate(pool: &PgPool) -> Result<(), Error> {
-  sqlx::migrate!("./migrations")
+  Migrator::new(FeatureMigrationSource::new("./migrations"))
+    .await
+    .unwrap()
     .set_ignore_missing(true)
     .run(pool)
     .await
