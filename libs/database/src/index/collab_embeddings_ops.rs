@@ -66,7 +66,7 @@ WHERE w.workspace_id = $1"#,
 struct Fragment {
   fragment_id: String,
   content_type: i32,
-  contents: String,
+  contents: Option<String>,
   embedding: Option<Vector>,
   metadata: serde_json::Value,
   fragment_index: i32,
@@ -116,6 +116,40 @@ pub async fn upsert_collab_embeddings(
     .execute(transaction.deref_mut())
     .await?;
   Ok(())
+}
+
+pub async fn get_collab_embedding_framgent_ids<'a, E>(
+  tx: E,
+  collab_ids: Vec<(String, CollabType)>,
+) -> Result<HashMap<String, Vec<String>>, sqlx::Error>
+where
+  E: Executor<'a, Database = Postgres>,
+{
+  let (oids, partition_keys): (Vec<String>, Vec<i32>) = collab_ids
+    .into_iter()
+    .map(|(object_id, collab_type)| (object_id, partition_key_from_collab_type(&collab_type)))
+    .unzip();
+  let records = sqlx::query!(
+    r#"
+      SELECT oid, fragment_id
+      FROM af_collab_embeddings
+      WHERE (oid, partition_key) = ANY (
+         SELECT UNNEST($1::text[]), UNNEST($2::int[])
+      )
+    "#,
+    &oids,
+    &partition_keys
+  )
+  .fetch_all(tx)
+  .await?;
+  let mut fragment_ids_by_oid = HashMap::new();
+  for record in records {
+    fragment_ids_by_oid
+      .entry(record.oid)
+      .or_insert_with(Vec::new)
+      .push(record.fragment_id);
+  }
+  Ok(fragment_ids_by_oid)
 }
 
 pub async fn stream_collabs_without_embeddings(
@@ -176,14 +210,19 @@ where
 
 pub async fn get_collabs_indexed_at<'a, E>(
   executor: E,
-  collab_ids: Vec<(String, CollabType)>,
+  collab_ids: &[(String, CollabType)],
 ) -> Result<HashMap<String, DateTime<Utc>>, Error>
 where
   E: Executor<'a, Database = Postgres>,
 {
   let (oids, partition_keys): (Vec<String>, Vec<i32>) = collab_ids
-    .into_iter()
-    .map(|(object_id, collab_type)| (object_id, partition_key_from_collab_type(&collab_type)))
+    .iter()
+    .map(|(object_id, collab_type)| {
+      (
+        object_id.clone(),
+        partition_key_from_collab_type(collab_type),
+      )
+    })
     .unzip();
 
   let result = sqlx::query!(

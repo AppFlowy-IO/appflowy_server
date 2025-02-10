@@ -90,8 +90,8 @@ async fn document_full_sync_then_search_test() {
   let remote_document = test_client
     .create_document_collab(&workspace_id, &object_id)
     .await;
-  let remote_plain_text = remote_document.to_plain_text(false, false).unwrap();
-  let local_plain_text = local_document.document.to_plain_text(false, false).unwrap();
+  let remote_plain_text = remote_document.paragraphs().join("");
+  let local_plain_text = local_document.document.paragraphs().join("");
   assert_eq!(local_plain_text, remote_plain_text);
 
   let search_result = test_client

@@ -254,7 +254,7 @@ Overall, Alex balances his work as a software programmer with his passion for sp
   // Simulate insert new content
   let contents = alex_banker_story();
   editor.insert_paragraphs(contents.into_iter().map(|s| s.to_string()).collect());
-  let text = editor.document.to_plain_text(false, false).unwrap();
+  let text = editor.document.paragraphs().join("");
   let expected = alex_banker_story().join("");
   assert_eq!(text, expected);
 

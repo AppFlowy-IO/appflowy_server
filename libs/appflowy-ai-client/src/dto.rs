@@ -277,7 +277,7 @@ pub struct EmbeddingRequest {
   pub dimensions: i32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum EmbeddingModel {
   #[serde(rename = "text-embedding-3-small")]
   TextEmbedding3Small,

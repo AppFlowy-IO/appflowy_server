@@ -1,9 +1,7 @@
-use crate::collab_indexer::{Indexer, IndexerProvider};
+use crate::collab_indexer::IndexerProvider;
 use crate::entity::EmbeddingRecord;
-use crate::error::IndexerError;
 use crate::metrics::EmbeddingMetrics;
 use crate::queue::add_background_embed_task;
-use crate::thread_pool::{ThreadPoolNoAbort, ThreadPoolNoAbortBuilder};
 use crate::vector::embedder::Embedder;
 use crate::vector::open_ai;
 use app_error::AppError;
@@ -12,11 +10,11 @@ use collab::preclude::Collab;
 use collab_document::document::DocumentBody;
 use collab_entity::CollabType;
 use database::collab::CollabStorage;
-use database::index::{update_collab_indexed_at, upsert_collab_embeddings};
+use database::index::{
+  get_collab_embedding_framgent_ids, update_collab_indexed_at, upsert_collab_embeddings,
+};
 use database::workspace::select_workspace_settings;
-use database_entity::dto::AFCollabEmbeddedChunk;
 use infra::env_util::get_env_var;
-use rayon::prelude::*;
 use redis::aio::ConnectionManager;
 use secrecy::{ExposeSecret, Secret};
 use serde::{Deserialize, Serialize};
@@ -30,6 +28,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::RwLock as TokioRwLock;
+use tokio::task::JoinSet;
 use tokio::time::timeout;
 use tracing::{debug, error, info, instrument, trace, warn};
 use uuid::Uuid;
@@ -38,7 +37,6 @@ pub struct IndexerScheduler {
   pub(crate) indexer_provider: Arc<IndexerProvider>,
   pub(crate) pg_pool: PgPool,
   pub(crate) storage: Arc<dyn CollabStorage>,
-  pub(crate) threads: Arc<ThreadPoolNoAbort>,
   #[allow(dead_code)]
   pub(crate) metrics: Arc<EmbeddingMetrics>,
   write_embedding_tx: UnboundedSender<EmbeddingRecord>,
@@ -77,19 +75,11 @@ impl IndexerScheduler {
     let (write_embedding_tx, write_embedding_rx) = unbounded_channel::<EmbeddingRecord>();
     let (gen_embedding_tx, gen_embedding_rx) =
       mpsc::channel::<UnindexedCollabTask>(config.embedding_buffer_size);
-    let threads = Arc::new(
-      ThreadPoolNoAbortBuilder::new()
-        .num_threads(num_thread)
-        .thread_name(|index| format!("create-embedding-thread-{index}"))
-        .build()
-        .unwrap(),
-    );
 
     let this = Arc::new(Self {
       indexer_provider,
       pg_pool,
       storage,
-      threads,
       metrics,
       write_embedding_tx,
       gen_embedding_tx,
@@ -105,7 +95,7 @@ impl IndexerScheduler {
 
     let latest_write_embedding_err = Arc::new(TokioRwLock::new(None));
     if this.index_enabled() {
-      tokio::spawn(spawn_rayon_generate_embeddings(
+      tokio::spawn(generate_embeddings_loop(
         gen_embedding_rx,
         Arc::downgrade(&this),
         num_thread,
@@ -258,18 +248,17 @@ impl IndexerScheduler {
       CollabType::Document => {
         let txn = collab.transact();
         let text = DocumentBody::from_collab(collab)
-          .and_then(|body| body.to_plain_text(txn, false, true).ok());
+          .map(|body| body.paragraphs(txn))
+          .unwrap_or_default();
 
-        if let Some(text) = text {
-          if !text.is_empty() {
-            let pending = UnindexedCollabTask::new(
-              Uuid::parse_str(workspace_id)?,
-              object_id.to_string(),
-              collab_type.clone(),
-              UnindexedData::Text(text),
-            );
-            self.embed_immediately(pending)?;
-          }
+        if !text.is_empty() {
+          let pending = UnindexedCollabTask::new(
+            Uuid::parse_str(workspace_id)?,
+            object_id.to_string(),
+            collab_type.clone(),
+            UnindexedData::Paragraphs(text),
+          );
+          self.embed_immediately(pending)?;
         }
       },
       _ => {
@@ -294,7 +283,7 @@ impl IndexerScheduler {
   }
 }
 
-async fn spawn_rayon_generate_embeddings(
+async fn generate_embeddings_loop(
   mut rx: mpsc::Receiver<UnindexedCollabTask>,
   scheduler: Weak<IndexerScheduler>,
   buffer_size: usize,
@@ -333,60 +322,102 @@ async fn spawn_rayon_generate_embeddings(
       records.len()
     );
     let metrics = scheduler.metrics.clone();
-    let threads = scheduler.threads.clone();
     let indexer_provider = scheduler.indexer_provider.clone();
     let write_embedding_tx = scheduler.write_embedding_tx.clone();
     let embedder = scheduler.create_embedder();
-    let result = tokio::task::spawn_blocking(move || {
-      match embedder {
-        Ok(embedder) => {
-          records.into_par_iter().for_each(|record| {
-            let result = threads.install(|| {
-              let indexer = indexer_provider.indexer_for(&record.collab_type);
-              match process_collab(&embedder, indexer, &record.object_id, record.data, &metrics) {
-                Ok(Some((tokens_used, contents))) => {
-                  if let Err(err) = write_embedding_tx.send(EmbeddingRecord {
-                    workspace_id: record.workspace_id,
-                    object_id: record.object_id,
-                    collab_type: record.collab_type,
-                    tokens_used,
-                    contents,
-                  }) {
-                    error!("Failed to send embedding record: {}", err);
+    match embedder {
+      Ok(embedder) => {
+        let params: Vec<_> = records
+          .iter()
+          .map(|r| (r.object_id.clone(), r.collab_type.clone()))
+          .collect();
+        let existing_embeddings =
+          match get_collab_embedding_framgent_ids(&scheduler.pg_pool, params).await {
+            Ok(existing_embeddings) => existing_embeddings,
+            Err(err) => {
+              error!("[Embedding] failed to get existing embeddings: {}", err);
+              Default::default()
+            },
+          };
+        let mut join_set = JoinSet::new();
+        for record in records {
+          if let Some(indexer) = indexer_provider.indexer_for(&record.collab_type) {
+            metrics.record_embed_count(1);
+            let paragraphs = match record.data {
+              UnindexedData::Paragraphs(paragraphs) => paragraphs,
+              UnindexedData::Text(text) => text.split('\n').map(|s| s.to_string()).collect(),
+            };
+            let embedder = embedder.clone();
+            match indexer.create_embedded_chunks_from_text(
+              record.object_id.clone(),
+              paragraphs,
+              embedder.model(),
+            ) {
+              Ok(mut chunks) => {
+                if let Some(fragment_ids) = existing_embeddings.get(&record.object_id) {
+                  for chunk in chunks.iter_mut() {
+                    if fragment_ids.contains(&chunk.fragment_id) {
+                      // we already had an embedding for this chunk
+                      chunk.content = None;
+                      chunk.embedding = None;
+                    }
                   }
-                },
-                Ok(None) => {
-                  debug!("No embedding for collab:{}", record.object_id);
-                },
-                Err(err) => {
-                  warn!(
-                    "Failed to create embeddings content for collab:{}, error:{}",
-                    record.object_id, err
-                  );
-                },
-              }
-            });
+                }
+                join_set.spawn(async move {
+                  if chunks.is_empty() {
+                    return Ok(None);
+                  }
 
-            if let Err(err) = result {
-              error!("Failed to install a task to rayon thread pool: {}", err);
+                  let result = indexer.embed(&embedder, chunks).await;
+                  match result {
+                    Ok(Some(embeddings)) => {
+                      let record = EmbeddingRecord {
+                        workspace_id: record.workspace_id,
+                        object_id: record.object_id,
+                        collab_type: record.collab_type,
+                        tokens_used: embeddings.tokens_consumed,
+                        contents: embeddings.params,
+                      };
+                      Ok(Some(record))
+                    },
+                    Ok(None) => Ok(None),
+                    Err(err) => Err(err),
+                  }
+                });
+              },
+              Err(err) => {
+                metrics.record_failed_embed_count(1);
+                warn!(
+                  "Failed to create embedded chunks for collab: {}, error:{}",
+                  record.object_id, err
+                );
+                continue;
+              },
             }
-          });
-        },
-        Err(err) => error!("[Embedding] Failed to create embedder: {}", err),
-      }
-      Ok::<_, IndexerError>(())
-    })
-    .await;
-
-    match result {
-      Ok(Ok(_)) => {
-        scheduler
-          .metrics
-          .record_gen_embedding_time(n as u32, start.elapsed().as_millis());
-        trace!("Successfully generated embeddings");
+          }
+        }
+        while let Some(Ok(res)) = join_set.join_next().await {
+          scheduler
+            .metrics
+            .record_gen_embedding_time(n as u32, start.elapsed().as_millis());
+          match res {
+            Ok(Some(record)) => {
+              if let Err(err) = write_embedding_tx.send(record) {
+                error!("Failed to send embedding record: {}", err);
+              }
+            },
+            Ok(None) => debug!("No embedding for collab"),
+            Err(err) => {
+              metrics.record_failed_embed_count(1);
+              warn!(
+                "Failed to create embeddings content for collab, error:{}",
+                err
+              );
+            },
+          }
+        }
       },
-      Ok(Err(err)) => error!("Failed to generate embeddings: {}", err),
-      Err(err) => error!("Failed to spawn a task to generate embeddings: {}", err),
+      Err(err) => error!("[Embedding] Failed to create embedder: {}", err),
     }
   }
 }
@@ -479,40 +510,6 @@ pub(crate) async fn batch_insert_records(
   Ok(())
 }
 
-/// This function must be called within the rayon thread pool.
-fn process_collab(
-  embedder: &Embedder,
-  indexer: Option<Arc<dyn Indexer>>,
-  object_id: &str,
-  data: UnindexedData,
-  metrics: &EmbeddingMetrics,
-) -> Result<Option<(u32, Vec<AFCollabEmbeddedChunk>)>, AppError> {
-  if let Some(indexer) = indexer {
-    let chunks = match data {
-      UnindexedData::Text(text) => {
-        indexer.create_embedded_chunks_from_text(object_id.to_string(), text, embedder.model())?
-      },
-    };
-
-    if chunks.is_empty() {
-      return Ok(None);
-    }
-
-    metrics.record_embed_count(1);
-    let result = indexer.embed(embedder, chunks);
-    match result {
-      Ok(Some(embeddings)) => Ok(Some((embeddings.tokens_consumed, embeddings.params))),
-      Ok(None) => Ok(None),
-      Err(err) => {
-        metrics.record_failed_embed_count(1);
-        Err(err)
-      },
-    }
-  } else {
-    Ok(None)
-  }
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UnindexedCollabTask {
   pub workspace_id: Uuid,
@@ -542,12 +539,14 @@ impl UnindexedCollabTask {
 #[derive(Debug, Serialize, Deserialize)]
 pub enum UnindexedData {
   Text(String),
+  Paragraphs(Vec<String>),
 }
 
 impl UnindexedData {
   pub fn is_empty(&self) -> bool {
     match self {
       UnindexedData::Text(text) => text.is_empty(),
+      UnindexedData::Paragraphs(text) => text.is_empty(),
     }
   }
 }

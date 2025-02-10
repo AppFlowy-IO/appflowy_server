@@ -598,9 +598,7 @@ pub async fn get_database_row_doc_changes(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("Failed to create document: {:?}", e)))?;
 
       // if the document content is the same, there is no need to update
-      if cur_doc.to_plain_text(false, false).unwrap_or_default()
-        == new_doc.to_plain_text(false, false).unwrap_or_default()
-      {
+      if cur_doc.paragraphs() == new_doc.paragraphs() {
         return Ok(None);
       };
 

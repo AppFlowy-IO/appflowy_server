@@ -1166,12 +1166,7 @@ fn fill_in_db_row_doc(
     })?;
   let doc = Document::open(doc_collab)
     .map_err(|err| AppError::Internal(anyhow::anyhow!("Failed to open document: {:?}", err)))?;
-  let plain_text = doc.to_plain_text(true, false).map_err(|err| {
-    AppError::Internal(anyhow::anyhow!(
-      "Failed to convert document to plain text: {:?}",
-      err
-    ))
-  })?;
+  let plain_text = doc.paragraphs().join("");
   row_detail.doc = Some(plain_text);
   Ok(())
 }

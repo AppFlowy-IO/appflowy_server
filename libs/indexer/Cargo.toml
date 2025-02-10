@@ -40,3 +40,4 @@ redis = { workspace = true, features = [
 tokio-util = "0.7.12"
 secrecy = { workspace = true, features = ["serde"] }
 reqwest.workspace = true
+twox-hash = { version = "2.1.0", features = ["xxhash64"] }

@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n      SELECT oid, fragment_id\n      FROM af_collab_embeddings\n      WHERE (oid, partition_key) = ANY (\n         SELECT UNNEST($1::text[]), UNNEST($2::int[])\n      )\n    ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "oid",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "fragment_id",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Int4Array"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "58427b8e9c1a19ed3419c30f808ada7d0a0adc495a2b305786f996a2ba78bc30"
+}

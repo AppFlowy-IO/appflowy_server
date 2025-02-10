@@ -2,6 +2,7 @@ use crate::collab_indexer::DocumentIndexer;
 use crate::vector::embedder::Embedder;
 use app_error::AppError;
 use appflowy_ai_client::dto::EmbeddingModel;
+use async_trait::async_trait;
 use collab::preclude::Collab;
 use collab_entity::CollabType;
 use database_entity::dto::{AFCollabEmbeddedChunk, AFCollabEmbeddings};
@@ -10,6 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::info;
 
+#[async_trait]
 pub trait Indexer: Send + Sync {
   fn create_embedded_chunks_from_collab(
     &self,
@@ -20,11 +22,11 @@ pub trait Indexer: Send + Sync {
   fn create_embedded_chunks_from_text(
     &self,
     object_id: String,
-    text: String,
+    paragraphs: Vec<String>,
     model: EmbeddingModel,
   ) -> Result<Vec<AFCollabEmbeddedChunk>, AppError>;
 
-  fn embed(
+  async fn embed(
     &self,
     embedder: &Embedder,
     content: Vec<AFCollabEmbeddedChunk>,

@@ -1,7 +1,7 @@
 use app_error::AppError;
 use collab_entity::CollabType;
-use database::index::get_collabs_indexed_at;
-use indexer::collab_indexer::{Indexer, IndexerProvider};
+use database::index::{get_collab_embedding_framgent_ids, get_collabs_indexed_at};
+use indexer::collab_indexer::IndexerProvider;
 use indexer::entity::EmbeddingRecord;
 use indexer::error::IndexerError;
 use indexer::metrics::EmbeddingMetrics;
@@ -13,7 +13,6 @@ use indexer::scheduler::{spawn_pg_write_embeddings, UnindexedCollabTask, Unindex
 use indexer::thread_pool::ThreadPoolNoAbort;
 use indexer::vector::embedder::Embedder;
 use indexer::vector::open_ai;
-use rayon::prelude::*;
 use redis::aio::ConnectionManager;
 use secrecy::{ExposeSecret, Secret};
 use sqlx::PgPool;
@@ -21,8 +20,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 use tokio::time::{interval, MissedTickBehavior};
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 
 pub struct BackgroundIndexerConfig {
   pub enable: bool,
@@ -138,7 +138,7 @@ async fn process_upcoming_tasks(
             .map(|task| (task.object_id.clone(), task.collab_type.clone()))
             .collect();
 
-          let indexed_collabs = get_collabs_indexed_at(&pg_pool, collab_ids)
+          let indexed_collabs = get_collabs_indexed_at(&pg_pool, &collab_ids)
             .await
             .unwrap_or_default();
 
@@ -158,36 +158,78 @@ async fn process_upcoming_tasks(
 
           let start = Instant::now();
           let num_tasks = tasks.len();
-          tasks.into_par_iter().for_each(|task| {
-            let result = threads.install(|| {
-              if let Some(indexer) = indexer_provider.indexer_for(&task.collab_type) {
-                let embedder = create_embedder(&config);
-                let result = handle_task(embedder, indexer, task);
-                match result {
-                  None => metrics.record_failed_embed_count(1),
-                  Some(record) => {
-                    metrics.record_embed_count(1);
-                    trace!(
-                      "[Background Embedding] send {} embedding record to write task",
-                      record.object_id
-                    );
-                    if let Err(err) = sender.send(record) {
-                      trace!(
-                      "[Background Embedding] failed to send embedding record to write task: {:?}",
-                      err
-                    );
-                    }
-                  },
+          let existing_embeddings = get_collab_embedding_framgent_ids(&pg_pool, collab_ids)
+            .await
+            .unwrap_or_default();
+          let mut join_set = JoinSet::new();
+          for task in tasks {
+            if let Some(indexer) = indexer_provider.indexer_for(&task.collab_type) {
+              let embedder = create_embedder(&config);
+              trace!(
+                "[Background Embedding] processing task: {}, content:{:?}, collab_type: {}",
+                task.object_id,
+                task.data,
+                task.collab_type
+              );
+              let paragraphs = match task.data {
+                UnindexedData::Paragraphs(paragraphs) => paragraphs,
+                UnindexedData::Text(text) => text.split('\n').map(|s| s.to_string()).collect(),
+              };
+              let mut chunks = match indexer.create_embedded_chunks_from_text(
+                task.object_id.clone(),
+                paragraphs,
+                embedder.model(),
+              ) {
+                Ok(chunks) => chunks,
+                Err(err) => {
+                  warn!(
+                    "[Background Embedding] failed to create embedded chunks for task: {}, error: {:?}",
+                    task.object_id,
+                    err
+                  );
+                  continue;
+                },
+              };
+              if let Some(existing_chunks) = existing_embeddings.get(&task.object_id) {
+                for chunk in chunks.iter_mut() {
+                  if existing_chunks.contains(&chunk.fragment_id) {
+                    chunk.content = None; // Clear content to mark unchanged chunk
+                    chunk.embedding = None;
+                  }
                 }
               }
-            });
-            if let Err(err) = result {
-              error!(
-                "[Background Embedding] Failed to process embedder task: {:?}",
-                err
-              );
+              join_set.spawn(async move {
+                let embeddings = indexer.embed(&embedder, chunks).await.ok()?;
+                embeddings.map(|embeddings| EmbeddingRecord {
+                  workspace_id: task.workspace_id,
+                  object_id: task.object_id,
+                  collab_type: task.collab_type,
+                  tokens_used: embeddings.tokens_consumed,
+                  contents: embeddings.params,
+                })
+              });
             }
-          });
+          }
+
+          while let Some(Ok(result)) = join_set.join_next().await {
+            match result {
+              None => metrics.record_failed_embed_count(1),
+              Some(record) => {
+                metrics.record_embed_count(1);
+                trace!(
+                  "[Background Embedding] send {} embedding record to write task",
+                  record.object_id
+                );
+                if let Err(err) = sender.send(record) {
+                  trace!(
+                    "[Background Embedding] failed to send embedding record to write task: {:?}",
+                    err
+                  );
+                }
+              },
+            }
+          }
+
           let cost = start.elapsed().as_millis();
           metrics.record_gen_embedding_time(num_tasks as u32, cost);
         }
@@ -214,32 +256,6 @@ async fn process_upcoming_tasks(
       },
     }
   }
-}
-
-fn handle_task(
-  embedder: Embedder,
-  indexer: Arc<dyn Indexer>,
-  task: UnindexedCollabTask,
-) -> Option<EmbeddingRecord> {
-  trace!(
-    "[Background Embedding] processing task: {}, content:{:?}, collab_type: {}",
-    task.object_id,
-    task.data,
-    task.collab_type
-  );
-  let chunks = match task.data {
-    UnindexedData::Text(text) => indexer
-      .create_embedded_chunks_from_text(task.object_id.clone(), text, embedder.model())
-      .ok()?,
-  };
-  let embeddings = indexer.embed(&embedder, chunks).ok()?;
-  embeddings.map(|embeddings| EmbeddingRecord {
-    workspace_id: task.workspace_id,
-    object_id: task.object_id,
-    collab_type: task.collab_type,
-    tokens_used: embeddings.tokens_consumed,
-    contents: embeddings.params,
-  })
 }
 
 fn create_embedder(config: &BackgroundIndexerConfig) -> Embedder {
