@@ -37,6 +37,7 @@ use client_api::entity::{
   QuestionStreamValue, UpdateCollabWebParams,
 };
 use client_api::ws::{WSClient, WSClientConfig};
+use client_api::ws2::WorkspaceController;
 use database_entity::dto::{
   AFCollabEmbedInfo, AFRole, AFSnapshotMeta, AFSnapshotMetas, AFUserProfile, AFUserWorkspaceInfo,
   AFWorkspace, AFWorkspaceInvitationStatus, AFWorkspaceMember, BatchQueryCollabResult,

@@ -103,6 +103,7 @@ tonic.workspace = true
 prost.workspace = true
 tonic-proto.workspace = true
 appflowy-collaborate = { path = "services/appflowy-collaborate" }
+appflowy-ws = { path = "services/appflowy-ws" }
 percent-encoding = "2.3.1"
 
 # ai
@@ -221,7 +222,7 @@ members = [
   "xtask",
   "libs/tonic-proto",
   "libs/mailer",
-  "libs/indexer",
+  "libs/indexer", "services/appflowy-ws",
 ]
 
 [workspace.dependencies]
@@ -294,6 +295,7 @@ tokio-tungstenite = "0.20"
 secrecy = { version = "0.8.0", features = ["serde"] }
 # collaboration
 yrs = { version = "0.21.3", features = ["sync"] }
+smallvec = { version = "1.13.2", features = ["const_new", "union"] }
 collab = { version = "0.2.0" }
 collab-entity = { version = "0.2.0" }
 collab-folder = { version = "0.2.0" }
@@ -301,6 +303,7 @@ collab-document = { version = "0.2.0" }
 collab-database = { version = "0.2.0" }
 collab-user = { version = "0.2.0" }
 collab-importer = { version = "0.1.0" }
+collab-plugins = { version = "0.2.0" }
 
 [profile.release]
 lto = true
@@ -327,6 +330,7 @@ collab-document = { git = "https://github.com/AppFlowy-IO/AppFlowy-Collab", rev 
 collab-user = { git = "https://github.com/AppFlowy-IO/AppFlowy-Collab", rev = "d51fecb64762855f9e54648c78ab1ee0d5404f97" }
 collab-database = { git = "https://github.com/AppFlowy-IO/AppFlowy-Collab", rev = "d51fecb64762855f9e54648c78ab1ee0d5404f97" }
 collab-importer = { git = "https://github.com/AppFlowy-IO/AppFlowy-Collab", rev = "d51fecb64762855f9e54648c78ab1ee0d5404f97" }
+collab-plugins = { git = "https://github.com/AppFlowy-IO/AppFlowy-Collab", rev = "d51fecb64762855f9e54648c78ab1ee0d5404f97" }
 
 [features]
 history = []

@@ -1,0 +1,92 @@
+[package]
+name = "appflowy-ws"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+access-control.workspace = true
+actix.workspace = true
+actix-web.workspace = true
+actix-http = { workspace = true, default-features = false, features = [
+  "openssl",
+  "compress-brotli",
+  "compress-gzip",
+] }
+actix-web-actors = { version = "4.3" }
+app-error = { workspace = true, features = [
+  "sqlx_error",
+  "actix_web_error",
+  "tokio_error",
+  "bincode_error",
+  "appflowy_ai_error",
+] }
+authentication.workspace = true
+brotli.workspace = true
+dashmap.workspace = true
+dotenvy.workspace = true
+async-stream.workspace = true
+futures.workspace = true
+appflowy-ai-client = { workspace = true, features = ["client-api"] }
+tracing = "0.1.40"
+futures-util = "0.3.30"
+tokio-util = { version = "0.7", features = ["codec"] }
+tokio-stream = { version = "0.1.14", features = ["sync"] }
+tokio = { workspace = true, features = [
+  "net",
+  "sync",
+  "macros",
+  "rt-multi-thread",
+] }
+async-trait.workspace = true
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_repr.workspace = true
+sqlx = { workspace = true, default-features = false, features = [
+  "runtime-tokio-rustls",
+  "macros",
+  "postgres",
+  "uuid",
+  "chrono",
+] }
+thiserror = "1.0.56"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+anyhow.workspace = true
+bytes.workspace = true
+arc-swap.workspace = true
+ureq = { version = "2.1.0", features = ["json"] }
+
+collab = { workspace = true }
+collab-entity = { workspace = true }
+collab-folder = { workspace = true }
+collab-document = { workspace = true }
+collab-stream = { workspace = true }
+database.workspace = true
+database-entity.workspace = true
+governor = { version = "0.6.3" }
+yrs.workspace = true
+chrono = "0.4.31"
+collab-rt-entity = { workspace = true, features = ["actix_message"] }
+collab-rt-protocol.workspace = true
+uuid = { version = "1", features = ["v4"] }
+md5 = "0.7"
+prometheus-client = "0.22.1"
+indexmap = "2.2.5"
+semver = "1.0.22"
+redis = "0.25.2"
+secrecy.workspace = true
+shared-entity = { workspace = true, features = ["cloud"] }
+parking_lot = "0.12.1"
+lazy_static = "1.4.0"
+itertools = "0.12.0"
+validator.workspace = true
+rayon.workspace = true
+tiktoken-rs = "0.6.0"
+unicode-segmentation = "1.9.0"
+aws-sdk-s3 = { version = "1.36.0", features = [
+  "behavior-version-latest",
+  "rt-tokio",
+] }
+zstd.workspace = true
+indexer.workspace = true

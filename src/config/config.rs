@@ -214,6 +214,8 @@ pub fn get_configuration() -> Result<Config, anyhow::Error> {
       heartbeat_interval: get_env_var("APPFLOWY_WEBSOCKET_HEARTBEAT_INTERVAL", "6").parse()?,
       client_timeout: get_env_var("APPFLOWY_WEBSOCKET_CLIENT_TIMEOUT", "60").parse()?,
       min_client_version: get_env_var("APPFLOWY_WEBSOCKET_CLIENT_MIN_VERSION", "0.5.0").parse()?,
+      min_client_version_v2: get_env_var("APPFLOWY_WEBSOCKET_CLIENT_MIN_VERSION_V2", "0.10.0")
+        .parse()?,
     },
     redis_uri: get_env_var("APPFLOWY_REDIS_URI", "redis://localhost:6379").into(),
     redis_worker_count: get_env_var("APPFLOWY_REDIS_WORKERS", "60").parse()?,
@@ -306,4 +308,5 @@ pub struct WebsocketSetting {
   pub heartbeat_interval: u8,
   pub client_timeout: u8,
   pub min_client_version: Version,
+  pub min_client_version_v2: Version,
 }

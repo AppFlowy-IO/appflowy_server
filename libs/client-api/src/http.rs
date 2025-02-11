@@ -105,6 +105,7 @@ pub struct Client {
   pub(crate) gotrue_client: gotrue::api::Client,
   pub base_url: String,
   pub ws_addr: String,
+  pub ws_v2_addr: String,
   pub device_id: String,
   pub client_version: Version,
   pub(crate) token: Arc<RwLock<ClientToken>>,
@@ -129,6 +130,7 @@ impl Client {
   pub fn new(
     base_url: &str,
     ws_addr: &str,
+    ws_v2_addr: &str,
     gotrue_url: &str,
     device_id: &str,
     config: ClientConfiguration,
@@ -180,6 +182,7 @@ impl Client {
     Self {
       base_url: base_url.to_string(),
       ws_addr: ws_addr.to_string(),
+      ws_v2_addr: ws_v2_addr.to_string(),
       cloud_client: reqwest_client.clone(),
       gotrue_client: gotrue::api::Client::new(reqwest_client, gotrue_url),
       token: Arc::new(RwLock::new(ClientToken::new())),
@@ -197,6 +200,10 @@ impl Client {
   }
 
   pub fn ws_addr(&self) -> &str {
+    &self.ws_addr
+  }
+
+  pub fn ws_v2_addr(&self) -> &str {
     &self.ws_addr
   }
 

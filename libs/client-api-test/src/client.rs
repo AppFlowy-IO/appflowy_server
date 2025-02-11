@@ -11,6 +11,8 @@ lazy_static! {
     get_env_var("LOCALHOST_URL", "http://localhost:8000");
   pub static ref LOCALHOST_WS: Cow<'static, str> =
     get_env_var("LOCALHOST_WS", "ws://localhost:8000/ws/v1");
+  pub static ref LOCALHOST_WS_V2: Cow<'static, str> =
+    get_env_var("LOCALHOST_WS", "ws://localhost:8000/ws/v2/");
   pub static ref LOCALHOST_GOTRUE: Cow<'static, str> =
     get_env_var("LOCALHOST_GOTRUE", "http://localhost:9999");
 }
@@ -61,10 +63,11 @@ pub fn localhost_client_with_device_id(device_id: &str) -> Client {
   Client::new(
     &LOCALHOST_URL,
     &LOCALHOST_WS,
+    &LOCALHOST_WS_V2,
     &LOCALHOST_GOTRUE,
     device_id,
     ClientConfiguration::default(),
-    "0.7.0",
+    "0.9.0",
   )
 }
 
