@@ -15,7 +15,7 @@ impl AIMetrics {
     let metrics = Self::default();
     let realtime_registry = registry.sub_registry_with_prefix("ai");
 
-    // Register each metric with the Prometheus registry
+    // (test) Register each metric with the Prometheus registry
     realtime_registry.register(
       "total_stream_count",
       "Total count of streams processed",

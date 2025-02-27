@@ -5,5 +5,7 @@ spec.yaml
 target/
 deploy/
 tests/
-docker/Dockerfile
-scripts/
+**/Dockerfile
+script/
+.github/
+doc/
